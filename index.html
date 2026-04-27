@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MediCare+ | Patient Management System</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&family=DM+Serif+Display:ital@0;1&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+  <script>try{const t=localStorage.getItem('medicare_theme');if(t)document.documentElement.setAttribute('data-theme',t);}catch(e){}</script>
+</head>
+<body>
+  <!-- Toast notification (always mounted) -->
+  <div class="toast-container" id="toast-container"></div>
+
+  <!-- Confirmation dialog (always mounted) -->
+  <div class="confirm-overlay" id="confirm-overlay" hidden>
+    <div class="confirm-dialog" role="dialog" aria-modal="true">
+      <div class="confirm-icon" id="confirm-icon">⚠️</div>
+      <h3 class="confirm-title" id="confirm-title">Are you sure?</h3>
+      <p class="confirm-message" id="confirm-message"></p>
+      <div class="confirm-actions">
+        <button class="btn" id="confirm-cancel">Cancel</button>
+        <button class="btn btn-danger" id="confirm-ok">Confirm</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- App root -->
+  <div id="app"></div>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
