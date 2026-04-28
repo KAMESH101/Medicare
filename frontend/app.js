@@ -10,10 +10,17 @@
 const API_BASE_URL = 'http://127.0.0.1:8000';
 
 const STORAGE_KEYS = {
+  PATIENTS:        'medicare_patients',
+  APPOINTMENTS:    'medicare_appointments',
+  NEXT_PATIENT_ID: 'medicare_next_patient_id',
+  NEXT_APPT_ID:    'medicare_next_appt_id',
   THEME:  'medicare_theme',
   TOKEN:  'medicare_token',
   USER:   'medicare_user',
 };
+
+/** True when running without the backend (e.g. Vercel static deploy) */
+let LOCAL_MODE = false;
 
 /* ── USERS (role-based auth) ── */
 // NEW: Replace single CREDENTIALS with a multi-user USERS array
@@ -95,7 +102,7 @@ const Storage = {
   },
 };
 
-/* ── API SERVICE (Real backend via FastAPI) ── */
+/* ── API SERVICE (Dual-mode: real backend OR localStorage fallback) ── */
 const ApiService = {
   _token() { return Storage.get(STORAGE_KEYS.TOKEN, null); },
   _headers() {
@@ -104,7 +111,6 @@ const ApiService = {
     if (t) h['Authorization'] = `Bearer ${t}`;
     return h;
   },
-  /** Convert snake_case API response keys to camelCase for frontend */
   _toCamel(obj) {
     if (Array.isArray(obj)) return obj.map(o => this._toCamel(o));
     if (obj && typeof obj === 'object') {
@@ -116,7 +122,6 @@ const ApiService = {
     }
     return obj;
   },
-  /** Convert camelCase frontend keys to snake_case for API */
   _toSnake(obj) {
     if (obj && typeof obj === 'object') {
       const out = {};
@@ -127,6 +132,15 @@ const ApiService = {
     }
     return obj;
   },
+  /** Persist patients and appointments to localStorage (local mode only) */
+  _persist() {
+    Storage.set(STORAGE_KEYS.PATIENTS,        State.patients);
+    Storage.set(STORAGE_KEYS.APPOINTMENTS,    State.appointments);
+    Storage.set(STORAGE_KEYS.NEXT_PATIENT_ID, State.nextPatientId);
+    Storage.set(STORAGE_KEYS.NEXT_APPT_ID,    State.nextApptId);
+  },
+  _delay(ms = 350) { return new Promise(r => setTimeout(r, ms)); },
+
   async _fetch(url, options = {}) {
     const res = await fetch(`${API_BASE_URL}${url}`, { ...options, headers: this._headers() });
     if (!res.ok) {
@@ -153,22 +167,34 @@ const ApiService = {
 
   /* Fetch lists */
   async fetchPatients() {
+    if (LOCAL_MODE) return State.patients;
     const data = await this._fetch('/patients');
     return data.map(p => this._toCamel(p));
   },
   async fetchAppointments() {
+    if (LOCAL_MODE) return State.appointments;
     const data = await this._fetch('/appointments');
     return data.map(a => this._toCamel(a));
   },
 
   /* Patient CRUD */
   async createPatient(d) {
+    if (LOCAL_MODE) {
+      await this._delay();
+      const p = { id: State.nextPatientId++, joined: todayISO(), ...d };
+      State.patients.push(p); this._persist(); return p;
+    }
     const data = await this._fetch('/patients', { method: 'POST', body: JSON.stringify(d) });
     const p = this._toCamel(data);
     State.patients.push(p);
     return p;
   },
   async updatePatient(id, d) {
+    if (LOCAL_MODE) {
+      await this._delay();
+      const i = State.patients.findIndex(p => p.id === id);
+      State.patients[i] = { ...State.patients[i], ...d }; this._persist(); return State.patients[i];
+    }
     const data = await this._fetch(`/patients/${id}`, { method: 'PUT', body: JSON.stringify(d) });
     const p = this._toCamel(data);
     const i = State.patients.findIndex(pt => pt.id === id);
@@ -176,6 +202,12 @@ const ApiService = {
     return p;
   },
   async deletePatient(id) {
+    if (LOCAL_MODE) {
+      await this._delay();
+      State.patients = State.patients.filter(p => p.id !== id);
+      State.appointments = State.appointments.filter(a => a.patientId !== id);
+      this._persist(); return;
+    }
     await this._fetch(`/patients/${id}`, { method: 'DELETE' });
     State.patients = State.patients.filter(p => p.id !== id);
     State.appointments = State.appointments.filter(a => a.patientId !== id);
@@ -183,12 +215,22 @@ const ApiService = {
 
   /* Appointment CRUD */
   async createAppointment(d) {
+    if (LOCAL_MODE) {
+      await this._delay();
+      const a = { id: State.nextApptId++, ...d };
+      State.appointments.push(a); this._persist(); return a;
+    }
     const data = await this._fetch('/appointments', { method: 'POST', body: JSON.stringify(this._toSnake(d)) });
     const a = this._toCamel(data);
     State.appointments.push(a);
     return a;
   },
   async updateAppointment(id, d) {
+    if (LOCAL_MODE) {
+      await this._delay();
+      const i = State.appointments.findIndex(a => a.id === id);
+      State.appointments[i] = { ...State.appointments[i], ...d }; this._persist(); return State.appointments[i];
+    }
     const data = await this._fetch(`/appointments/${id}`, { method: 'PUT', body: JSON.stringify(this._toSnake(d)) });
     const a = this._toCamel(data);
     const i = State.appointments.findIndex(ap => ap.id === id);
@@ -196,6 +238,7 @@ const ApiService = {
     return a;
   },
   async cancelAppointment(id) {
+    if (LOCAL_MODE) return this.updateAppointment(id, { status: 'Cancelled' });
     const data = await this._fetch(`/appointments/${id}`, { method: 'DELETE' });
     const a = this._toCamel(data);
     const i = State.appointments.findIndex(ap => ap.id === id);
@@ -239,9 +282,11 @@ const State = {
   calendarYear: new Date().getFullYear(), calendarMonth: new Date().getMonth(), calendarDay: null,
   notifOpen: false, filtersOpen: false,
   filters: { gender: 'all', ageMin: '', ageMax: '', condition: 'all', status: 'all' },
-  patients:     [],
-  appointments: [],
-  doctors:      DOCTORS,
+  patients:      [],
+  appointments:  [],
+  doctors:       DOCTORS,
+  nextPatientId: 5,
+  nextApptId:    5,
 };
 
 /* ============================================================
@@ -1457,7 +1502,7 @@ function renderApptModal() {
    ACTIONS (Business Logic)
    ============================================================ */
 
-// Authenticates against the FastAPI backend; stores JWT token and user info
+// Authenticates against the FastAPI backend; falls back to local USERS array if backend is down
 async function doLogin() {
   const username = (document.getElementById('l-user')?.value || '').trim().toLowerCase();
   const password = (document.getElementById('l-pass')?.value || '');
@@ -1467,27 +1512,49 @@ async function doLogin() {
     render(); return;
   }
 
-  try {
-    const result = await ApiService.login(username, password);
+  // Try backend API first
+  if (!LOCAL_MODE) {
+    try {
+      const result = await ApiService.login(username, password);
+      Storage.set(STORAGE_KEYS.TOKEN, result.access_token);
+      Storage.set(STORAGE_KEYS.USER,  result.user);
+      State.currentUser  = result.user;
+      State.loginErr     = '';
+      State.loginAttempts = 0;
+      State.page         = 'home';
+      State.loading      = true;
+      render();
+      await loadAppData();
+      State.loading = false;
+      renderContent();
+      return;
+    } catch (e) {
+      // If it's a network error (backend unreachable), switch to local mode
+      if (e.message === 'Failed to fetch' || e.name === 'TypeError') {
+        console.warn('Backend unreachable — switching to local mode');
+        LOCAL_MODE = true;
+        initLocalState();
+      } else {
+        // Auth error from backend (wrong password) — don't fall back
+        State.loginAttempts++;
+        State.loginErr = e.message || 'Invalid username or password.';
+        render();
+        return;
+      }
+    }
+  }
 
-    // Persist JWT and user info
-    Storage.set(STORAGE_KEYS.TOKEN, result.access_token);
-    Storage.set(STORAGE_KEYS.USER,  result.user);
-
-    State.currentUser  = result.user;
+  // Local mode: authenticate against USERS array
+  const matched = USERS.find(u => u.username.toLowerCase() === username && u.password === password);
+  if (matched) {
+    State.currentUser  = matched;
+    State.page         = 'home';
     State.loginErr     = '';
     State.loginAttempts = 0;
-    State.page         = 'home';
-    State.loading      = true;
     render();
-
-    // Fetch real data from backend
-    await loadAppData();
-    State.loading = false;
-    renderContent();
-  } catch (e) {
+  } else {
     State.loginAttempts++;
-    State.loginErr = e.message || 'Invalid username or password.';
+    State.loginErr = 'Invalid username or password.';
     render();
   }
 }
@@ -1496,16 +1563,27 @@ function doLogout() {
   Storage.set(STORAGE_KEYS.TOKEN, null);
   Storage.set(STORAGE_KEYS.USER,  null);
   State.currentUser  = null;
-  State.patients     = [];
-  State.appointments = [];
   State.page         = 'login';
   State.loginErr     = '';
   State.loginAttempts = 0;
+  if (!LOCAL_MODE) {
+    State.patients     = [];
+    State.appointments = [];
+  }
   render();
+}
+
+/** Loads localStorage seed data for local/offline mode */
+function initLocalState() {
+  State.patients      = Storage.get(STORAGE_KEYS.PATIENTS,        SEED_PATIENTS);
+  State.appointments  = Storage.get(STORAGE_KEYS.APPOINTMENTS,    SEED_APPOINTMENTS);
+  State.nextPatientId = Storage.get(STORAGE_KEYS.NEXT_PATIENT_ID, 5);
+  State.nextApptId    = Storage.get(STORAGE_KEYS.NEXT_APPT_ID,    5);
 }
 
 /** Fetches patients and appointments from the backend API */
 async function loadAppData() {
+  if (LOCAL_MODE) return;
   const [patients, appointments] = await Promise.all([
     ApiService.fetchPatients(),
     ApiService.fetchAppointments(),
@@ -1897,10 +1975,20 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (e.target.id === 'confirm-overlay') Confirm._answer(false);
   });
 
+  // Detect if the backend is reachable
+  try {
+    await fetch(`${API_BASE_URL}/health`, { method: 'GET' });
+    LOCAL_MODE = false;
+  } catch {
+    LOCAL_MODE = true;
+    console.info('MediCare+ running in local mode (no backend detected)');
+    initLocalState();
+  }
+
   // Restore session from stored JWT token (survives page refresh)
   const storedToken = Storage.get(STORAGE_KEYS.TOKEN, null);
   const storedUser  = Storage.get(STORAGE_KEYS.USER, null);
-  if (storedToken && storedUser) {
+  if (!LOCAL_MODE && storedToken && storedUser) {
     State.currentUser = storedUser;
     State.page = 'home';
     State.loading = true;
@@ -1910,7 +1998,6 @@ document.addEventListener('DOMContentLoaded', async () => {
       State.loading = false;
       renderContent();
     } catch (e) {
-      // Token expired or invalid — force re-login
       doLogout();
     }
   } else {
