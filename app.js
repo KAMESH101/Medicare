@@ -7,12 +7,12 @@
 'use strict';
 
 /* ── CONSTANTS ── */
+const API_BASE_URL = 'http://127.0.0.1:8000';
+
 const STORAGE_KEYS = {
-  PATIENTS:        'medicare_patients',
-  APPOINTMENTS:    'medicare_appointments',
-  NEXT_PATIENT_ID: 'medicare_next_patient_id',
-  NEXT_APPT_ID:    'medicare_next_appt_id',
-  THEME:           'medicare_theme',
+  THEME:  'medicare_theme',
+  TOKEN:  'medicare_token',
+  USER:   'medicare_user',
 };
 
 /* ── USERS (role-based auth) ── */
@@ -95,36 +95,113 @@ const Storage = {
   },
 };
 
-/* ── API SERVICE (Simulated async layer) ── */
+/* ── API SERVICE (Real backend via FastAPI) ── */
 const ApiService = {
-  _d(ms = 350) { return new Promise(r => setTimeout(r, ms)); },
+  _token() { return Storage.get(STORAGE_KEYS.TOKEN, null); },
+  _headers() {
+    const h = { 'Content-Type': 'application/json' };
+    const t = this._token();
+    if (t) h['Authorization'] = `Bearer ${t}`;
+    return h;
+  },
+  /** Convert snake_case API response keys to camelCase for frontend */
+  _toCamel(obj) {
+    if (Array.isArray(obj)) return obj.map(o => this._toCamel(o));
+    if (obj && typeof obj === 'object') {
+      const out = {};
+      for (const [k, v] of Object.entries(obj)) {
+        out[k.replace(/_([a-z])/g, (_, c) => c.toUpperCase())] = v;
+      }
+      return out;
+    }
+    return obj;
+  },
+  /** Convert camelCase frontend keys to snake_case for API */
+  _toSnake(obj) {
+    if (obj && typeof obj === 'object') {
+      const out = {};
+      for (const [k, v] of Object.entries(obj)) {
+        out[k.replace(/[A-Z]/g, c => '_' + c.toLowerCase())] = v;
+      }
+      return out;
+    }
+    return obj;
+  },
+  async _fetch(url, options = {}) {
+    const res = await fetch(`${API_BASE_URL}${url}`, { ...options, headers: this._headers() });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'Request failed' }));
+      throw new Error(err.detail || 'Request failed');
+    }
+    if (res.status === 204) return null;
+    return res.json();
+  },
+
+  /* Auth */
+  async login(username, password) {
+    const res = await fetch(`${API_BASE_URL}/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'Invalid credentials' }));
+      throw new Error(err.detail || 'Invalid credentials');
+    }
+    return res.json();
+  },
+
+  /* Fetch lists */
+  async fetchPatients() {
+    const data = await this._fetch('/patients');
+    return data.map(p => this._toCamel(p));
+  },
+  async fetchAppointments() {
+    const data = await this._fetch('/appointments');
+    return data.map(a => this._toCamel(a));
+  },
+
+  /* Patient CRUD */
   async createPatient(d) {
-    await this._d();
-    const p = { id: State.nextPatientId++, joined: todayISO(), ...d };
-    State.patients.push(p); State.persist(); return p;
+    const data = await this._fetch('/patients', { method: 'POST', body: JSON.stringify(d) });
+    const p = this._toCamel(data);
+    State.patients.push(p);
+    return p;
   },
   async updatePatient(id, d) {
-    await this._d();
-    const i = State.patients.findIndex(p => p.id === id);
-    State.patients[i] = { ...State.patients[i], ...d }; State.persist(); return State.patients[i];
+    const data = await this._fetch(`/patients/${id}`, { method: 'PUT', body: JSON.stringify(d) });
+    const p = this._toCamel(data);
+    const i = State.patients.findIndex(pt => pt.id === id);
+    if (i >= 0) State.patients[i] = p;
+    return p;
   },
   async deletePatient(id) {
-    await this._d();
-    State.patients     = State.patients.filter(p => p.id !== id);
+    await this._fetch(`/patients/${id}`, { method: 'DELETE' });
+    State.patients = State.patients.filter(p => p.id !== id);
     State.appointments = State.appointments.filter(a => a.patientId !== id);
-    State.persist();
   },
+
+  /* Appointment CRUD */
   async createAppointment(d) {
-    await this._d();
-    const a = { id: State.nextApptId++, ...d };
-    State.appointments.push(a); State.persist(); return a;
+    const data = await this._fetch('/appointments', { method: 'POST', body: JSON.stringify(this._toSnake(d)) });
+    const a = this._toCamel(data);
+    State.appointments.push(a);
+    return a;
   },
   async updateAppointment(id, d) {
-    await this._d();
-    const i = State.appointments.findIndex(a => a.id === id);
-    State.appointments[i] = { ...State.appointments[i], ...d }; State.persist(); return State.appointments[i];
+    const data = await this._fetch(`/appointments/${id}`, { method: 'PUT', body: JSON.stringify(this._toSnake(d)) });
+    const a = this._toCamel(data);
+    const i = State.appointments.findIndex(ap => ap.id === id);
+    if (i >= 0) State.appointments[i] = a;
+    return a;
   },
-  async cancelAppointment(id) { return this.updateAppointment(id, { status: 'Cancelled' }); },
+  async cancelAppointment(id) {
+    const data = await this._fetch(`/appointments/${id}`, { method: 'DELETE' });
+    const a = this._toCamel(data);
+    const i = State.appointments.findIndex(ap => ap.id === id);
+    if (i >= 0) State.appointments[i] = a;
+    return a;
+  },
 };
 
 /* ── DARK MODE ── */
@@ -155,7 +232,6 @@ const Notifications = {
 
 /* ── STATE ── */
 const State = {
-  // MODIFIED: loggedIn is now derived from currentUser; currentUser is set on login
   page: 'login', currentUser: null, loginErr: '', loginAttempts: 0,
   get loggedIn() { return !!this.currentUser; },
   modal: null, editPatient: null, editAppt: null, prefDoc: null,
@@ -163,17 +239,9 @@ const State = {
   calendarYear: new Date().getFullYear(), calendarMonth: new Date().getMonth(), calendarDay: null,
   notifOpen: false, filtersOpen: false,
   filters: { gender: 'all', ageMin: '', ageMax: '', condition: 'all', status: 'all' },
-  patients:      Storage.get(STORAGE_KEYS.PATIENTS,        SEED_PATIENTS),
-  appointments:  Storage.get(STORAGE_KEYS.APPOINTMENTS,    SEED_APPOINTMENTS),
-  doctors:       DOCTORS,
-  nextPatientId: Storage.get(STORAGE_KEYS.NEXT_PATIENT_ID, 5),
-  nextApptId:    Storage.get(STORAGE_KEYS.NEXT_APPT_ID,    5),
-  persist() {
-    Storage.set(STORAGE_KEYS.PATIENTS,        this.patients);
-    Storage.set(STORAGE_KEYS.APPOINTMENTS,    this.appointments);
-    Storage.set(STORAGE_KEYS.NEXT_PATIENT_ID, this.nextPatientId);
-    Storage.set(STORAGE_KEYS.NEXT_APPT_ID,    this.nextApptId);
-  },
+  patients:     [],
+  appointments: [],
+  doctors:      DOCTORS,
 };
 
 /* ============================================================
@@ -1389,8 +1457,8 @@ function renderApptModal() {
    ACTIONS (Business Logic)
    ============================================================ */
 
-// MODIFIED: Validates against the USERS array; stores matched user in State.currentUser
-function doLogin() {
+// Authenticates against the FastAPI backend; stores JWT token and user info
+async function doLogin() {
   const username = (document.getElementById('l-user')?.value || '').trim().toLowerCase();
   const password = (document.getElementById('l-pass')?.value || '');
 
@@ -1399,29 +1467,51 @@ function doLogin() {
     render(); return;
   }
 
-  // Find matching user in USERS array (case-insensitive username)
-  const matched = USERS.find(u => u.username.toLowerCase() === username && u.password === password);
+  try {
+    const result = await ApiService.login(username, password);
 
-  if (matched) {
-    State.currentUser   = matched;     // store full user object
-    State.page          = 'home';
-    State.loginErr      = '';
+    // Persist JWT and user info
+    Storage.set(STORAGE_KEYS.TOKEN, result.access_token);
+    Storage.set(STORAGE_KEYS.USER,  result.user);
+
+    State.currentUser  = result.user;
+    State.loginErr     = '';
     State.loginAttempts = 0;
+    State.page         = 'home';
+    State.loading      = true;
     render();
-  } else {
+
+    // Fetch real data from backend
+    await loadAppData();
+    State.loading = false;
+    renderContent();
+  } catch (e) {
     State.loginAttempts++;
-    State.loginErr = 'Invalid username or password.';
+    State.loginErr = e.message || 'Invalid username or password.';
     render();
   }
 }
 
-// MODIFIED: Clears currentUser (loggedIn is now a derived getter)
 function doLogout() {
-  State.currentUser   = null;
-  State.page          = 'login';
-  State.loginErr      = '';
+  Storage.set(STORAGE_KEYS.TOKEN, null);
+  Storage.set(STORAGE_KEYS.USER,  null);
+  State.currentUser  = null;
+  State.patients     = [];
+  State.appointments = [];
+  State.page         = 'login';
+  State.loginErr     = '';
   State.loginAttempts = 0;
   render();
+}
+
+/** Fetches patients and appointments from the backend API */
+async function loadAppData() {
+  const [patients, appointments] = await Promise.all([
+    ApiService.fetchPatients(),
+    ApiService.fetchAppointments(),
+  ]);
+  State.patients     = patients;
+  State.appointments = appointments;
 }
 
 // MODIFIED: Access guard — blocks navigation to pages the current role cannot access
@@ -1799,12 +1889,31 @@ function iconLogout() {
 /* ============================================================
    BOOTSTRAP
    ============================================================ */
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
   DarkMode.init();
   document.getElementById('confirm-ok')?.addEventListener('click',     () => Confirm._answer(true));
   document.getElementById('confirm-cancel')?.addEventListener('click', () => Confirm._answer(false));
   document.getElementById('confirm-overlay')?.addEventListener('click', e => {
     if (e.target.id === 'confirm-overlay') Confirm._answer(false);
   });
-  render();
+
+  // Restore session from stored JWT token (survives page refresh)
+  const storedToken = Storage.get(STORAGE_KEYS.TOKEN, null);
+  const storedUser  = Storage.get(STORAGE_KEYS.USER, null);
+  if (storedToken && storedUser) {
+    State.currentUser = storedUser;
+    State.page = 'home';
+    State.loading = true;
+    render();
+    try {
+      await loadAppData();
+      State.loading = false;
+      renderContent();
+    } catch (e) {
+      // Token expired or invalid — force re-login
+      doLogout();
+    }
+  } else {
+    render();
+  }
 });
