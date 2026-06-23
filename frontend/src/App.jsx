@@ -41,9 +41,9 @@ export default function App() {
   const [loginErr, setLoginErr] = useState('');
   const [loginAttempts, setLoginAttempts] = useState(0);
 
-  // ── Domain Data State ──
-  const [patients, setPatients] = useState([]);
-  const [appointments, setAppointments] = useState([]);
+  // ── Domain Data State — seed from localStorage immediately for instant render ──
+  const [patients, setPatients] = useState(() => Storage.get(STORAGE_KEYS.PATIENTS, []));
+  const [appointments, setAppointments] = useState(() => Storage.get(STORAGE_KEYS.APPOINTMENTS, []));
 
   // ── Layout Toggles ──
   const [theme, setTheme] = useState('light');
@@ -102,49 +102,54 @@ export default function App() {
     document.documentElement.setAttribute('data-theme', nextTheme);
   };
 
-  // ── HEALTH CHECK & SESSION RESTORE ──
+  // ── BACKGROUND REFRESH: show cached data immediately, silently refresh from API ──
   useEffect(() => {
-    const initApp = async () => {
-      const storedToken = Storage.get(STORAGE_KEYS.TOKEN, null);
-      const storedUser = Storage.get(STORAGE_KEYS.USER, null);
-      const hasSession = !!(storedToken && storedUser);
+    const storedToken = Storage.get(STORAGE_KEYS.TOKEN, null);
+    const storedUser  = Storage.get(STORAGE_KEYS.USER,  null);
+    if (!storedToken || !storedUser) {
+      setLoading(false);
+      return;
+    }
 
-      let isOnline = false;
+    // Show UI immediately — data is already loaded from localStorage in useState()
+    setLoading(false);
+
+    // Silently ping backend and refresh data in background (non-blocking)
+    const backgroundRefresh = async () => {
       try {
-        await fetch(`${API_BASE_URL}/health`, { method: 'GET' });
+        // Quick connectivity check with a short timeout
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 5000);
+        await fetch(`${API_BASE_URL}/health`, { method: 'GET', signal: ctrl.signal });
+        clearTimeout(timer);
         ApiService.setLocalMode(false);
-        isOnline = true;
       } catch {
+        // Backend unreachable or slow — stay with localStorage data, no error shown
         ApiService.setLocalMode(true);
-        console.info('MediCare+ running in offline mode (no backend detected)');
-      }
-
-      if (!isOnline) {
-        initLocalState();
-        setLoading(false);
+        console.info('MediCare+ running in offline mode');
         return;
       }
 
-      if (hasSession) {
-        try {
-          const [pList, aList] = await Promise.all([
-            ApiService.fetchPatients(),
-            ApiService.fetchAppointments()
-          ]);
-          setPatients(pList);
-          setAppointments(aList);
-        } catch (e) {
-          console.error('Session restore failed:', e);
+      // Backend is reachable — fetch fresh data silently
+      try {
+        const [pList, aList] = await Promise.all([
+          ApiService.fetchPatients(),
+          ApiService.fetchAppointments()
+        ]);
+        // Update state & persist to localStorage cache for next visit
+        setPatients(pList);
+        setAppointments(aList);
+        Storage.set(STORAGE_KEYS.PATIENTS, pList);
+        Storage.set(STORAGE_KEYS.APPOINTMENTS, aList);
+      } catch (e) {
+        console.warn('Background refresh failed — using cached data:', e.message);
+        if (e.message?.includes('401') || e.message?.includes('Unauthorized')) {
           handleLogout();
-        } finally {
-          setLoading(false);
         }
-      } else {
-        setLoading(false);
       }
     };
 
-    initApp();
+    backgroundRefresh();
   }, []);
 
   const initLocalState = () => {
@@ -166,20 +171,23 @@ export default function App() {
         const result = await ApiService.login(username, password);
         Storage.set(STORAGE_KEYS.TOKEN, result.access_token);
         Storage.set(STORAGE_KEYS.USER, result.user);
-        
+
         setCurrentUser(result.user);
         setPage('home');
         setLoginErr('');
         setLoginAttempts(0);
-        setLoading(true);
-        
-        // Load operational records
+        setLoading(false); // Show home immediately, don't block on data fetch
+
+        // Fetch data in background after navigation
         const [pList, aList] = await Promise.all([
           ApiService.fetchPatients(),
           ApiService.fetchAppointments()
         ]);
         setPatients(pList);
         setAppointments(aList);
+        // Cache for instant load next time
+        Storage.set(STORAGE_KEYS.PATIENTS, pList);
+        Storage.set(STORAGE_KEYS.APPOINTMENTS, aList);
         return;
       } catch (e) {
         if (e.message === 'Failed to fetch' || e.name === 'TypeError') {
