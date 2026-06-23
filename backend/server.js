@@ -9,8 +9,9 @@ const PORT = process.env.PORT || 8000;
 // Connect to MongoDB and seed if database is empty
 connectDB();
 
-// CORS configuration (allow ports used by frontend)
+// CORS configuration (allow ports used by frontend + Vercel production)
 const allowedOrigins = [
+  'https://medicare-gamma-mauve.vercel.app', // Vercel production
   'http://127.0.0.1:5500',
   'http://localhost:5500',
   'http://127.0.0.1:3000',
@@ -76,6 +77,10 @@ app.use((err, req, res, next) => {
 });
 
 // Start Express server
-app.listen(PORT, () => {
-  console.log(`[Medicare] Server is running on http://127.0.0.1:${PORT}`);
-});
+if (process.env.NODE_ENV !== 'production' || !process.env.VERCEL) {
+  app.listen(PORT, () => {
+    console.log(`[Medicare] Server is running on http://127.0.0.1:${PORT}`);
+  });
+}
+
+module.exports = app;

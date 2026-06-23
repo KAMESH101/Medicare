@@ -3,7 +3,13 @@
    Dual-mode: real FastAPI backend OR localStorage fallback
    ============================================================ */
 
-export const API_BASE_URL = 'http://127.0.0.1:8000';
+// On Vercel, frontend and API share the same domain — use relative paths.
+// Locally, point directly to the Express dev server on port 8000.
+export const API_BASE_URL = (
+  import.meta.env.PROD
+    ? ''                       // Vercel: same-origin, rewrites handle routing
+    : 'http://127.0.0.1:8000'  // Local dev
+);
 
 export const STORAGE_KEYS = {
   PATIENTS:        'medicare_patients',

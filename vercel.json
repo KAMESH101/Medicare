@@ -1,4 +1,12 @@
 {
-  "buildCommand": "npm install && npm run build",
-  "outputDirectory": "dist"
+  "version": 2,
+  "buildCommand": "npm --prefix frontend install && npm --prefix frontend run build",
+  "outputDirectory": "frontend/dist",
+  "installCommand": "npm install && npm --prefix frontend install",
+  "rewrites": [
+    { "source": "/auth/:path*",         "destination": "/api/index" },
+    { "source": "/patients/:path*",     "destination": "/api/index" },
+    { "source": "/appointments/:path*", "destination": "/api/index" },
+    { "source": "/health",              "destination": "/api/index" }
+  ]
 }
