@@ -1,4 +1,8 @@
-require('dotenv').config();
+// Only load .env in local development — Vercel injects env vars automatically
+if (process.env.NODE_ENV !== 'production') {
+  require('dotenv').config();
+}
+
 const express = require('express');
 const cors = require('cors');
 const { connectDB } = require('./db');
@@ -6,80 +10,71 @@ const { connectDB } = require('./db');
 const app = express();
 const PORT = process.env.PORT || 8000;
 
-// Connect to MongoDB and seed if database is empty
-connectDB();
-
-// CORS configuration (allow ports used by frontend + Vercel production)
-const allowedOrigins = [
-  'https://medicare-gamma-mauve.vercel.app', // Vercel production
-  'http://127.0.0.1:5500',
-  'http://localhost:5500',
-  'http://127.0.0.1:3000',
-  'http://localhost:3000',
-  'http://127.0.0.1:5173',
-  'http://localhost:5173',
-];
-
+// ── CORS ──────────────────────────────────────────────────────────────────────
 app.use(cors({
   origin: (origin, callback) => {
-    // Allow requests with no origin (like mobile apps or curl)
+    // Allow same-origin Vercel requests (no origin header) and whitelisted origins
+    const allowedOrigins = [
+      'https://medicare-gamma-mauve.vercel.app',
+      'http://127.0.0.1:5500',
+      'http://localhost:5500',
+      'http://127.0.0.1:3000',
+      'http://localhost:3000',
+      'http://127.0.0.1:5173',
+      'http://localhost:5173',
+    ];
     if (!origin) return callback(null, true);
-    if (allowedOrigins.indexOf(origin) === -1) {
-      const msg = 'The CORS policy for this site does not allow access from the specified Origin.';
-      return callback(new Error(msg), false);
-    }
-    return callback(null, true);
+    if (allowedOrigins.includes(origin)) return callback(null, true);
+    return callback(new Error('Not allowed by CORS'), false);
   },
   credentials: true,
 }));
 
-// Body parser
+// ── Body parser ───────────────────────────────────────────────────────────────
 app.use(express.json());
 
-// Expose health check endpoint
-app.get('/health', (req, res) => {
-  res.json({
-    status: 'ok',
-    service: 'MediCare+ API',
-    version: '1.0.0',
-  });
-});
-
-// Mount routers
-app.use('/auth', require('./routes/auth'));
-app.use('/patients', require('./routes/patients'));
-app.use('/appointments', require('./routes/appointments'));
-
-// Handle undefined routes
-app.use((req, res) => {
-  res.status(404).json({
-    error: true,
-    detail: 'Resource not found',
-  });
-});
-
-// Global error handler
-app.use((err, req, res, next) => {
-  console.error('[Error] Global handler caught:', err.message);
-  
-  if (err.name === 'ValidationError') {
-    return res.status(422).json({
+// ── DB middleware (connect before every request in serverless) ────────────────
+app.use(async (req, res, next) => {
+  try {
+    await connectDB();
+    next();
+  } catch (err) {
+    console.error('[Server] DB connection failed:', err.message);
+    return res.status(500).json({
       error: true,
-      detail: 'Validation error',
-      errors: err.errors,
+      detail: 'Database connection failed. Please check server configuration.',
     });
   }
-
-  res.status(500).json({
-    error: true,
-    detail: err.message || 'Internal server error',
-  });
 });
 
-// Start Express server
-if (process.env.NODE_ENV !== 'production' || !process.env.VERCEL) {
+// ── Health check ──────────────────────────────────────────────────────────────
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok', service: 'MediCare+ API', version: '2.0.0' });
+});
+
+// ── API Routes ────────────────────────────────────────────────────────────────
+app.use('/auth',         require('./routes/auth'));
+app.use('/patients',     require('./routes/patients'));
+app.use('/appointments', require('./routes/appointments'));
+
+// ── 404 handler ───────────────────────────────────────────────────────────────
+app.use((req, res) => {
+  res.status(404).json({ error: true, detail: 'Resource not found' });
+});
+
+// ── Global error handler ──────────────────────────────────────────────────────
+app.use((err, req, res, next) => {
+  console.error('[Error]', err.message);
+  if (err.name === 'ValidationError') {
+    return res.status(422).json({ error: true, detail: 'Validation error', errors: err.errors });
+  }
+  res.status(500).json({ error: true, detail: err.message || 'Internal server error' });
+});
+
+// ── Local dev server (not used on Vercel) ─────────────────────────────────────
+if (process.env.NODE_ENV !== 'production') {
   app.listen(PORT, () => {
-    console.log(`[Medicare] Server is running on http://127.0.0.1:${PORT}`);
+    console.log(`[Medicare] Server running on http://127.0.0.1:${PORT}`);
   });
 }
 
