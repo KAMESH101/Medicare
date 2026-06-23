@@ -15,6 +15,7 @@ app.use(cors({
   origin: (origin, callback) => {
     // Allow same-origin Vercel requests (no origin header) and whitelisted origins
     const allowedOrigins = [
+      'https://medicare-silk-ten.vercel.app',
       'https://medicare-gamma-mauve.vercel.app',
       'http://127.0.0.1:5500',
       'http://localhost:5500',
