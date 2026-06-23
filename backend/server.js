@@ -34,7 +34,12 @@ app.use(cors({
 // ── Body parser ───────────────────────────────────────────────────────────────
 app.use(express.json());
 
-// ── DB middleware (connect before every request in serverless) ────────────────
+// ── Health check (Fast check, no DB required) ─────────────────────────────────
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok', service: 'MediCare+ API', version: '2.0.0' });
+});
+
+// ── DB middleware (connect before every database-reliant request) ─────────────
 app.use(async (req, res, next) => {
   try {
     await connectDB();
@@ -46,11 +51,6 @@ app.use(async (req, res, next) => {
       detail: 'Database connection failed. Please check server configuration.',
     });
   }
-});
-
-// ── Health check ──────────────────────────────────────────────────────────────
-app.get('/health', (req, res) => {
-  res.json({ status: 'ok', service: 'MediCare+ API', version: '2.0.0' });
 });
 
 // ── API Routes ────────────────────────────────────────────────────────────────

@@ -29,8 +29,10 @@ async function connectDB() {
     cachedConn = conn;
     console.log('[DB] Connected to MongoDB successfully.');
 
-    // Auto-seed on fresh database
-    await seedDatabase();
+    // Auto-seed on fresh database (skip in production for speed)
+    if (process.env.NODE_ENV !== 'production') {
+      await seedDatabase();
+    }
 
     return conn;
   } catch (err) {

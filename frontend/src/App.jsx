@@ -32,8 +32,12 @@ import CalendarView from './components/CalendarView';
 
 export default function App() {
   // ── Session & Auth State ──
-  const [currentUser, setCurrentUser] = useState(null);
-  const [page, setPage] = useState('login');
+  const [currentUser, setCurrentUser] = useState(() => Storage.get(STORAGE_KEYS.USER, null));
+  const [page, setPage] = useState(() => {
+    const storedToken = Storage.get(STORAGE_KEYS.TOKEN, null);
+    const storedUser = Storage.get(STORAGE_KEYS.USER, null);
+    return (storedToken && storedUser) ? 'home' : 'login';
+  });
   const [loginErr, setLoginErr] = useState('');
   const [loginAttempts, setLoginAttempts] = useState(0);
 
@@ -55,7 +59,11 @@ export default function App() {
   const [toasts, setToasts] = useState([]);
   const [confirmConfig, setConfirmConfig] = useState(null);
 
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(() => {
+    const storedToken = Storage.get(STORAGE_KEYS.TOKEN, null);
+    const storedUser = Storage.get(STORAGE_KEYS.USER, null);
+    return !!(storedToken && storedUser);
+  });
 
   // ── TOAST MANAGER ──
   const addToast = (message, type = 'success') => {
@@ -97,6 +105,10 @@ export default function App() {
   // ── HEALTH CHECK & SESSION RESTORE ──
   useEffect(() => {
     const initApp = async () => {
+      const storedToken = Storage.get(STORAGE_KEYS.TOKEN, null);
+      const storedUser = Storage.get(STORAGE_KEYS.USER, null);
+      const hasSession = !!(storedToken && storedUser);
+
       let isOnline = false;
       try {
         await fetch(`${API_BASE_URL}/health`, { method: 'GET' });
@@ -107,34 +119,28 @@ export default function App() {
         console.info('MediCare+ running in offline mode (no backend detected)');
       }
 
-      // Initialize offline state if needed
       if (!isOnline) {
         initLocalState();
+        setLoading(false);
+        return;
       }
 
-      // Restore session from token
-      const storedToken = Storage.get(STORAGE_KEYS.TOKEN, null);
-      const storedUser = Storage.get(STORAGE_KEYS.USER, null);
-
-      if (storedToken && storedUser) {
-        setCurrentUser(storedUser);
-        setPage('home');
-        setLoading(true);
+      if (hasSession) {
         try {
-          if (isOnline) {
-            const [pList, aList] = await Promise.all([
-              ApiService.fetchPatients(),
-              ApiService.fetchAppointments()
-            ]);
-            setPatients(pList);
-            setAppointments(aList);
-          }
-        } catch {
-          // Token expired or invalid
+          const [pList, aList] = await Promise.all([
+            ApiService.fetchPatients(),
+            ApiService.fetchAppointments()
+          ]);
+          setPatients(pList);
+          setAppointments(aList);
+        } catch (e) {
+          console.error('Session restore failed:', e);
           handleLogout();
         } finally {
           setLoading(false);
         }
+      } else {
+        setLoading(false);
       }
     };
 
